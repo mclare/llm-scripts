@@ -6,6 +6,12 @@ I typically work with local LLMs running with [Ollama](https://ollama.com/) and 
 
 ## Notes
 
+### Environment
+Most scripts assume an OLLAMA_HOST environment variable.
+[Nomad job to start the ollama instance with a python environment along side it](https://github.com/mclare/nomad-jobs-and-bootstraps/blob/main/ollama/ollama.nomad.hcl)
+
+
+### LLM notes
 Table of LLMs that I've worked with, and some of *my* quick notes mostly on their memory footprint.
 
 | NAME                                    | ID            | SIZE     | Coment|
