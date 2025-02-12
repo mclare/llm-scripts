@@ -11,9 +11,9 @@
 
 # To-do:
 # 1. (done) Iterate through all markdown files in the folder. As needed, we'll make use of Incremental Summarization to generate both a key points summary and quiz questions
-# 1.1 Check the results directory contains and existing summary and quiz questions, if not, the next step is to generate them
-# 2. Use the Ollama AI model to identify the topic of the note, generate a summary of key point, and create a quiz questions (multiple choice and multiple select) for each key concept, product, service, resource, organizatiion, and term identified in the summary
-# 2.1 Summary can be generated using extractive summarization techniques and stored in the results directory as JSON
+# 1.1 (done) Check the results directory contains and existing summary and quiz questions, if not, the next step is to generate them
+# 2. (done) Use the Ollama AI model to identify the topic of the note, generate a summary of key point, and create a quiz questions (multiple choice and multiple select) for each key concept, product, service, resource, organizatiion, and term identified in the summary
+# 2.1 (done) Summary can be generated using extractive summarization techniques and stored in the results directory as JSON
 # 2.2 Quiz multiple choice questions can be generated using the key terms and key points identified in the summary and stored in Brightspace CSV format for either multiple choice or multiple select questions
 # Each questions needs the following properties:
 #   ID: Unique identifier for the question (e.g., identified topic + question number)
@@ -85,6 +85,7 @@ import argparse
 import markdown
 import json
 import requests
+import tiktoken
 from pathlib import Path
 
 # Parse command-line arguments
@@ -95,15 +96,22 @@ parser.add_argument("--results-dir", dest="results_dir", default="./results", he
 args = parser.parse_args()
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+TOKEN_LIMIT = 2048  # Ollama's token limit
+
+# Load tokenizer
+encoder = tiktoken.get_encoding("cl100k_base")
+
 
 def get_markdown_files(notes_dir):
     """Recursively find all markdown files in the given directory."""
     return [f for f in Path(notes_dir).rglob("*.md")]
 
+
 def read_markdown_file(filepath):
     """Read a markdown file and return its contents as text."""
     with open(filepath, "r", encoding="utf-8") as f:
         return f.read()
+
 
 def check_existing_results(results_dir, md_file):
     """Check if the results directory contains existing summary and quiz files for the given markdown file."""
@@ -112,13 +120,22 @@ def check_existing_results(results_dir, md_file):
     quiz_file = Path(results_dir) / f"{base_name}.csv"
     return summary_file.exists() and quiz_file.exists()
 
+
+def trim_to_token_limit(text, limit=TOKEN_LIMIT):
+    """Trim text to fit within the token limit."""
+    tokens = encoder.encode(text)
+    if len(tokens) > limit:
+        tokens = tokens[:limit]  # Trim to the first `limit` tokens
+    return encoder.decode(tokens)
+
+
 def query_ollama(prompt):
     """Send a request to the Ollama AI model to generate responses."""
     try:
         response = requests.post(
             f"{OLLAMA_HOST}/api/generate",
-            json={"model": args.model, "prompt": prompt},
-            timeout=30
+            json={"prompt": prompt, "model": args.model},
+            timeout=60*15  # Increase timeout
         )
         response.raise_for_status()
         data = response.json()
@@ -127,20 +144,32 @@ def query_ollama(prompt):
         print(f"Error communicating with Ollama: {e}")
         return ""
 
+
+def split_text_into_chunks(text, chunk_size=1500):
+    """Splits text into smaller chunks to fit within the model's token limit."""
+    tokens = encoder.encode(text)
+    return [encoder.decode(tokens[i : i + chunk_size]) for i in range(0, len(tokens), chunk_size)]
+
+
 def generate_summary_and_questions(content):
-    """Generate a summary and quiz questions using Ollama."""
-    summary_prompt = f"Summarize the following study notes into key points:\n{content}"
-    summary = query_ollama(summary_prompt)
+    """Generate a summary and quiz questions using Ollama in chunks."""
+    chunks = split_text_into_chunks(content, chunk_size=1500)
     
-    quiz_prompt = f"Based on the following summary, generate multiple choice and multi-select quiz questions:\n{summary}"
+    summaries = []
+    for chunk in chunks:
+        summary_prompt = f"Summarize the following study notes into key points:\n{chunk}"
+        summaries.append(query_ollama(summary_prompt))
+    
+    full_summary = "\n".join(summaries)
+    
+    quiz_prompt = f"Based on the following summary, generate multiple choice and multi-select quiz questions:\n{full_summary}"
     quiz_questions = query_ollama(quiz_prompt)
     
-    return summary, quiz_questions
+    return full_summary, quiz_questions
+
 
 def parse_markdown_notes(notes_dir, results_dir):
     """Process markdown notes, checking for existing results, and generating new ones if needed."""
-    Path(results_dir).mkdir(parents=True, exist_ok=True)  # Ensure results directory exists
-    
     for md_file in get_markdown_files(notes_dir):
         if check_existing_results(results_dir, md_file):
             print(f"Skipping {md_file}, results already exist.")
